@@ -66,15 +66,45 @@ int main(int argc, char **argv)
     start_time = MPI_Wtime();
     /* =========================== AREA OF INTEREST ============================ */
 
-    /* Do the matrix product */
-    for (i=0; i<Ndim; i++){
-		for (j=0; j<Mdim; j++){
-			for(k=0;k<Pdim;k++){
-				/* C(i,j) = sum(over k) A(i,k) * B(k,j) */
-				*(C+(i*Ndim+j)) += *(A+(i*Ndim+k)) *  *(B+(k*Pdim+j));
-			}
-		}
-	}
+    int local_rows = Ndim / size;
+
+    /* 1. Broadcast della matrice B a tutti i processi */
+    MPI_Bcast(B, Pdim * Mdim, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    /* Allocazione memoria locale */
+    double *local_A = (double *)malloc(local_rows * Pdim * sizeof(double));
+    double *local_C = (double *)malloc(local_rows * Mdim * sizeof(double));
+
+    /* Inizializzazione a 0 di local_C (Fondamentale!) */
+    for (i = 0; i < local_rows * Mdim; i++) {
+        local_C[i] = 0.0;
+    }
+
+    /* 2. Distribuzione equa delle righe di A */
+    MPI_Scatter(A, local_rows * Pdim, MPI_DOUBLE, 
+                local_A, local_rows * Pdim, MPI_DOUBLE, 
+                0, MPI_COMM_WORLD);
+
+    /* 3. OTTIMIZZAZIONE MASSIMA: Loop Interchange (ordine i, k, j) */
+    for (i = 0; i < local_rows; i++) {
+        for (k = 0; k < Pdim; k++) {
+            /* Estraiamo A[i][k] in una variabile per non ricalcolare l'indice nel ciclo più interno */
+            double a_ik = local_A[i * Pdim + k]; 
+            
+            for (j = 0; j < Mdim; j++) {
+                local_C[i * Mdim + j] += a_ik * B[k * Pdim + j];
+            }
+        }
+    }
+
+    /* 4. Raccolta dei risultati esatti sul rank 0 */
+    MPI_Gather(local_C, local_rows * Mdim, MPI_DOUBLE, 
+               C, local_rows * Mdim, MPI_DOUBLE, 
+               0, MPI_COMM_WORLD);
+
+    /* 5. Pulizia memoria locale */
+    free(local_A);
+    free(local_C);
 
     /* ========================= END AREA OF INTEREST ========================== */
 	run_time = MPI_Wtime() - start_time;
